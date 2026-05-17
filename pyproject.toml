@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "OpenJarvis"
-version = "0.1.1"
+version = "1.0.0"
 description = "OpenJarvis — modular AI assistant backend with composable intelligence primitives"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -180,6 +180,9 @@ select = ["E", "F", "I", "W"]
 [tool.ruff.lint.per-file-ignores]
 "src/openjarvis/evals/datasets/*.py" = ["E501"]
 "src/openjarvis/evals/scorers/*.py" = ["E501"]
+# hybrid/ is research code with long prompt strings and paradigm-specific
+# config dicts — same relaxation as evals research code above.
+"src/openjarvis/agents/hybrid/*.py" = ["E501"]
 
 [dependency-groups]
 dev = [
