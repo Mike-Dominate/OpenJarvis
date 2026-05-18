@@ -43,7 +43,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from openjarvis.agents._stubs import AgentContext
-from openjarvis.agents.hybrid._base import LocalCloudAgent, _record_event
+from openjarvis.agents.hybrid._base import (
+    LocalCloudAgent,
+    _bump_cloud_calls,
+    _bump_local_calls,
+    _record_event,
+)
 from openjarvis.agents.hybrid._prices import (
     cost as estimate_cost,
 )
@@ -438,6 +443,7 @@ def _loop_cloud_anthropic(
             kwargs["temperature"] = 0.0
         t0 = time.time()
         msg = client.messages.create(**kwargs)
+        _bump_cloud_calls()
         latency = time.time() - t0
         tokens_in += msg.usage.input_tokens
         tokens_out += msg.usage.output_tokens
@@ -567,6 +573,7 @@ def _loop_cloud_openai(
             kwargs["temperature"] = 0.0
         t0 = time.time()
         resp = client.chat.completions.create(**kwargs)
+        _bump_cloud_calls()
         latency = time.time() - t0
         u = resp.usage
         tokens_in += getattr(u, "prompt_tokens", 0) if u else 0
@@ -751,6 +758,7 @@ def _loop_cloud_gemini(
         resp = client.models.generate_content(
             model=model, contents=contents, config=cfg,
         )
+        _bump_cloud_calls()
         latency = time.time() - t0
         um = getattr(resp, "usage_metadata", None)
         p = int(getattr(um, "prompt_token_count", 0) or 0) if um else 0
@@ -921,6 +929,7 @@ def _loop_local(
             tool_choice="auto",
             extra_body={"chat_template_kwargs": {"enable_thinking": False}},
         )
+        _bump_local_calls()
         latency = time.time() - t0
         u = resp.usage
         tokens_in += getattr(u, "prompt_tokens", 0) if u else 0

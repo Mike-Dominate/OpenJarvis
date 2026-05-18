@@ -45,6 +45,8 @@ from openjarvis.agents._stubs import AgentContext
 from openjarvis.agents.hybrid._base import (
     WEB_SEARCH_COST_PER_CALL,
     LocalCloudAgent,
+    _bump_cloud_calls,
+    _bump_local_calls,
     _record_event,
     build_web_search_tool,
     web_search_cfg,
@@ -177,6 +179,7 @@ def _make_local_generator(local_endpoint: str, local_model: str):
                 max_tokens=max_tokens,
                 temperature=temperature,
             )
+            _bump_local_calls()
         except Exception as e:
             _record_event({
                 "kind": "archon_local_gen_error",
@@ -229,6 +232,7 @@ def _wrap_archon_cloud_generators() -> None:
             kwargs["max_completion_tokens"] = max_tokens
         t0 = _time.time()
         resp = client.chat.completions.create(**kwargs)
+        _bump_cloud_calls()
         u = resp.usage
         if u:
             _tally()["cloud_prompt"] += getattr(u, "prompt_tokens", 0) or 0
@@ -266,6 +270,7 @@ def _wrap_archon_cloud_generators() -> None:
             kwargs["tools"] = [ws_tool]
         t0 = _time.time()
         resp = client.messages.create(**kwargs)
+        _bump_cloud_calls()
         text = "".join(b.text for b in resp.content if hasattr(b, "text"))
         u = resp.usage
         if u:

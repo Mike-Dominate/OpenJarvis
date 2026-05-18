@@ -125,6 +125,49 @@ def _close_trace() -> None:
         delattr(_TRACE_STATE, "events")
 
 
+# ---------- Thread-local LLM-call counter ----------
+#
+# Parallel to the trace buffer: every cloud SDK call (anthropic / openai /
+# gemini, including each turn of ``_call_anthropic_agent`` and each turn of
+# the mini-SWE multi-turn loops) bumps ``cloud``; every local vLLM call
+# bumps ``local``. ``run()`` opens a fresh pair per task, drops the totals
+# into ``meta["n_cloud_calls"]`` / ``meta["n_local_calls"]``, then closes.
+#
+# Why thread-local and not an instance counter: agents are shared across
+# the runner's ``ThreadPoolExecutor`` (one agent, N concurrent tasks). An
+# attribute on ``self`` would race; this matches the trace buffer's
+# pattern exactly so it composes with the rest of the per-task plumbing.
+
+_CALL_COUNTS = threading.local()
+
+
+def _call_counts() -> Optional[Dict[str, int]]:
+    return getattr(_CALL_COUNTS, "counts", None)
+
+
+def _bump_cloud_calls(n: int = 1) -> None:
+    counts = _call_counts()
+    if counts is not None:
+        counts["cloud"] += int(n)
+
+
+def _bump_local_calls(n: int = 1) -> None:
+    counts = _call_counts()
+    if counts is not None:
+        counts["local"] += int(n)
+
+
+def _open_call_counts() -> Dict[str, int]:
+    counts: Dict[str, int] = {"cloud": 0, "local": 0}
+    _CALL_COUNTS.counts = counts
+    return counts
+
+
+def _close_call_counts() -> None:
+    if hasattr(_CALL_COUNTS, "counts"):
+        delattr(_CALL_COUNTS, "counts")
+
+
 def _serialize_block(block: Any) -> Dict[str, Any]:
     """Turn an Anthropic content block (text / tool_use / server_tool_use /
     web_search_tool_result / thinking) into a JSON-safe dict.
@@ -280,6 +323,7 @@ class LocalCloudAgent(BaseAgent):
             kwargs["output_config"] = output_config
         t0 = time.time()
         msg = client.messages.create(**kwargs)
+        _bump_cloud_calls()
         latency = time.time() - t0
         text = "".join(b.text for b in msg.content if hasattr(b, "text"))
         srv = getattr(msg.usage, "server_tool_use", None)
@@ -350,6 +394,7 @@ class LocalCloudAgent(BaseAgent):
             kwargs["tool_choice"] = tool_choice
         t0 = time.time()
         resp = client.chat.completions.create(**kwargs)
+        _bump_cloud_calls()
         latency = time.time() - t0
         choice = resp.choices[0]
         message = choice.message
@@ -420,6 +465,7 @@ class LocalCloudAgent(BaseAgent):
             contents=user,
             config=cfg,
         )
+        _bump_cloud_calls()
         latency = time.time() - t0
         # `resp.text` is the convenience accessor that concatenates every
         # text part in the first candidate. Empty if the model emitted
@@ -490,6 +536,7 @@ class LocalCloudAgent(BaseAgent):
             kwargs["tool_choice"] = tool_choice
         t0 = time.time()
         resp = client.chat.completions.create(**kwargs)
+        _bump_local_calls()
         latency = time.time() - t0
         choice = resp.choices[0]
         message = choice.message
@@ -581,6 +628,7 @@ class LocalCloudAgent(BaseAgent):
                 kwargs["tools"] = tools
             t0 = time.time()
             msg = client.messages.create(**kwargs)
+            _bump_cloud_calls()
             latency = time.time() - t0
             text = "".join(b.text for b in msg.content if hasattr(b, "text"))
             srv = getattr(msg.usage, "server_tool_use", None)
@@ -709,6 +757,8 @@ class LocalCloudAgent(BaseAgent):
             "tokens_cloud": 0,
             "cost_usd": 0.0,
             "latency_s": 0.0,
+            "n_cloud_calls": 0,
+            "n_local_calls": 0,
             "soft_error": reason,
             "traces": {"soft_error": reason},
         }
@@ -730,6 +780,7 @@ class LocalCloudAgent(BaseAgent):
         self._emit_turn_start(input)
         t0 = time.time()
         events = _open_trace()
+        counts = _open_call_counts()
         meta: Dict[str, Any]
         answer: str = ""
         soft_reason: Optional[str] = None
@@ -745,6 +796,16 @@ class LocalCloudAgent(BaseAgent):
                 soft_reason = soft
                 meta = self._soft_fail_metadata(soft)
         finally:
+            # Snapshot call counts BEFORE closing the thread-local state.
+            # Subclasses don't track this themselves — every SDK call site
+            # bumps the thread-local in this file, so the totals are
+            # authoritative as of right now. Overwrites any value
+            # ``_run_paradigm`` happened to set (it shouldn't set them).
+            n_cloud = counts.get("cloud", 0)
+            n_local = counts.get("local", 0)
+            if "meta" in locals():
+                meta["n_cloud_calls"] = int(n_cloud)
+                meta["n_local_calls"] = int(n_local)
             # Persist the trace before the trace state is closed (and even on
             # hard failure, so we get a record of what we did before it broke).
             self._write_trace_log(
@@ -752,6 +813,7 @@ class LocalCloudAgent(BaseAgent):
                 events, soft_reason, exc_obj,
             )
             _close_trace()
+            _close_call_counts()
         meta.setdefault("latency_s", time.time() - t0)
         if soft_reason is not None:
             self._emit_turn_end(soft_error=soft_reason)
@@ -840,6 +902,8 @@ __all__ = [
     "LocalCloudAgent",
     "NO_TEMP_PREFIXES",
     "WEB_SEARCH_COST_PER_CALL",
+    "_bump_cloud_calls",
+    "_bump_local_calls",
     "build_web_search_tool",
     "estimate_cost",
     "is_gpt5_family",

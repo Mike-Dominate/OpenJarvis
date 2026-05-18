@@ -13,6 +13,12 @@ Definition per paradigm:
 The legacy ``skillorchestra`` tool_calls numbers in
 ``docs/results-table.md`` came from a defunct telemetry path; this
 re-establishes the contract on the actual row-write path.
+
+Companion follow-up (same day): the same row also carries
+``n_cloud_calls`` and ``n_local_calls`` — full LLM round-trip count per
+task, alongside ``tool_calls``. Counters live in ``_base._CALL_COUNTS``
+(thread-local, parallel to the trace buffer) and are bumped inside every
+SDK helper. Each paradigm test below asserts both are ``int`` and ``>=0``.
 """
 
 from __future__ import annotations
@@ -23,6 +29,20 @@ from unittest.mock import patch
 import pytest
 
 from openjarvis.agents._stubs import AgentContext
+
+
+def _assert_call_counts(meta: dict) -> None:
+    """Shared shape check for n_cloud_calls / n_local_calls in metadata.
+
+    Every paradigm result must expose both as ``int >= 0``; ``None`` is
+    not allowed (the runner casts to int unconditionally).
+    """
+    n_cloud = meta.get("n_cloud_calls")
+    n_local = meta.get("n_local_calls")
+    assert isinstance(n_cloud, int), f"n_cloud_calls not int: {n_cloud!r}"
+    assert isinstance(n_local, int), f"n_local_calls not int: {n_local!r}"
+    assert n_cloud >= 0
+    assert n_local >= 0
 
 
 # ---------------------------------------------------------------------------
@@ -91,6 +111,10 @@ def test_baseline_cloud_gaia_tool_calls_eq_web_searches(fake_anthropic):
     tc = result.metadata.get("tool_calls")
     assert isinstance(tc, int)
     assert tc == result.metadata["web_search_uses"] == 3
+    _assert_call_counts(result.metadata)
+    # One turn of _call_anthropic_agent (fake returns end_turn immediately).
+    assert result.metadata["n_cloud_calls"] == 1
+    assert result.metadata["n_local_calls"] == 0
 
 
 def test_baseline_cloud_gaia_oneshot_tool_calls_zero(monkeypatch):
@@ -113,6 +137,11 @@ def test_baseline_cloud_gaia_oneshot_tool_calls_zero(monkeypatch):
     result = agent.run("X?", ctx)
     assert isinstance(result.metadata.get("tool_calls"), int)
     assert result.metadata["tool_calls"] == 0
+    _assert_call_counts(result.metadata)
+    # _call_cloud was stubbed at the method level, so the SDK helper that
+    # would bump the cloud counter never runs. Both counters stay at 0.
+    assert result.metadata["n_cloud_calls"] == 0
+    assert result.metadata["n_local_calls"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -151,6 +180,12 @@ def test_advisors_gaia_tool_calls_sums_search_counts(fake_anthropic, monkeypatch
     assert isinstance(tc, int)
     # Two executor passes, each reports 3 searches → 6 total.
     assert tc == result.metadata["web_search_uses"] == 6
+    _assert_call_counts(result.metadata)
+    # Two cloud executor passes, each one turn → n_cloud_calls == 2.
+    # The local advisor call is stubbed (doesn't hit _call_vllm), so
+    # n_local_calls stays 0.
+    assert result.metadata["n_cloud_calls"] == 2
+    assert result.metadata["n_local_calls"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -225,6 +260,7 @@ def test_minions_gaia_tool_calls_eq_prefetch_searches(monkeypatch):
     tc = result.metadata.get("tool_calls")
     assert isinstance(tc, int)
     assert tc == 2  # matches the stubbed prefetch n_searches
+    _assert_call_counts(result.metadata)
 
 
 # ---------------------------------------------------------------------------
@@ -275,6 +311,7 @@ def test_baseline_cloud_swe_tool_calls_eq_bash_turns(monkeypatch):
     tc = result.metadata.get("tool_calls")
     assert isinstance(tc, int)
     assert tc == 11
+    _assert_call_counts(result.metadata)
 
 
 def test_minions_swe_tool_calls_eq_worker_bash_turns(monkeypatch):
@@ -308,6 +345,7 @@ def test_minions_swe_tool_calls_eq_worker_bash_turns(monkeypatch):
     tc = result.metadata.get("tool_calls")
     assert isinstance(tc, int)
     assert tc == 9  # only the worker subloop counts; supervisor is text
+    _assert_call_counts(result.metadata)
 
 
 def test_advisors_swe_tool_calls_sums_both_executor_passes(monkeypatch):
@@ -344,6 +382,7 @@ def test_advisors_swe_tool_calls_sums_both_executor_passes(monkeypatch):
     tc = result.metadata.get("tool_calls")
     assert isinstance(tc, int)
     assert tc == 8  # initial + final executor passes, each 4 bash turns
+    _assert_call_counts(result.metadata)
 
 
 # ---------------------------------------------------------------------------
@@ -367,6 +406,8 @@ def test_runner_row_includes_tool_calls(monkeypatch):
                     "latency_s": 0.1,
                     "web_search_uses": 2,
                     "tool_calls": 5,
+                    "n_cloud_calls": 3,
+                    "n_local_calls": 0,
                     "traces": {},
                 },
                 turns=1,
@@ -377,3 +418,35 @@ def test_runner_row_includes_tool_calls(monkeypatch):
     assert "tool_calls" in row
     assert isinstance(row["tool_calls"], int)
     assert row["tool_calls"] == 5
+    # Companion follow-up: n_cloud_calls / n_local_calls likewise surface.
+    assert isinstance(row.get("n_cloud_calls"), int)
+    assert isinstance(row.get("n_local_calls"), int)
+    assert row["n_cloud_calls"] == 3
+    assert row["n_local_calls"] == 0
+
+
+# ---------------------------------------------------------------------------
+# 6. Runner row contract — missing fields default to 0 (don't crash).
+# ---------------------------------------------------------------------------
+
+def test_runner_row_defaults_call_counts_when_missing(monkeypatch):
+    """If an agent forgets to set ``n_cloud_calls`` / ``n_local_calls`` (e.g.
+    a third-party paradigm that doesn't use ``LocalCloudAgent.run``), the
+    runner must still emit the fields as ``int`` zero — never ``None``."""
+    from openjarvis.agents._stubs import AgentResult
+    from openjarvis.agents.hybrid import runner
+
+    class _BareAgent:
+        def run(self, prompt, ctx):
+            return AgentResult(
+                content="x",
+                metadata={"tokens_cloud": 10, "cost_usd": 0.0},
+                turns=1,
+            )
+
+    task = {"task_id": "rowZ", "question": "x", "reference": "x", "metadata": {}}
+    row = runner._run_one(_BareAgent(), "gaia", task, "/tmp/log")
+    assert isinstance(row["n_cloud_calls"], int)
+    assert isinstance(row["n_local_calls"], int)
+    assert row["n_cloud_calls"] == 0
+    assert row["n_local_calls"] == 0
