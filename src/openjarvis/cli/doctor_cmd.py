@@ -213,11 +213,18 @@ def _check_optional_deps() -> List[CheckResult]:
             __import__(pkg)
             results.append(CheckResult(f"Optional: {description}", "ok", "Installed"))
         except Exception:
+            # `openjarvis[extra]` is a pip-style marker the user shouldn't
+            # have to translate. Surface a copy-pasteable command instead.
+            if install_hint.startswith("openjarvis[") and install_hint.endswith("]"):
+                extra = install_hint[len("openjarvis[") : -1]
+                hint = f"run: uv sync --extra {extra}"
+            else:
+                hint = install_hint
             results.append(
                 CheckResult(
                     f"Optional: {description}",
                     "warn",
-                    f"Not installed ({install_hint})",
+                    f"Not installed — {hint}",
                 )
             )
     return results
