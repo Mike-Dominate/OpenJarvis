@@ -11,10 +11,12 @@ from __future__ import annotations
 
 # USD per million tokens, (input, output). Local models = 0.
 PRICES: dict[str, tuple[float, float]] = {
+    "claude-opus-4-8":             (5.00, 25.0),
     "claude-opus-4-7":             (5.00, 25.0),
     "claude-sonnet-4-6":           (3.00, 15.0),
     "claude-haiku-4-5":            (1.00, 5.00),
     "claude-haiku-4-5-20251001":   (1.00, 5.00),
+    "gpt-5.5":                     (2.00, 15.0),
     "gpt-5":                       (1.25, 10.0),
     "gpt-5-mini":                  (0.25, 2.00),
     "gpt-5-mini-2025-08-07":       (0.25, 2.00),
