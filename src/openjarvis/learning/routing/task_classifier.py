@@ -46,12 +46,12 @@ _RESEARCH_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 _SUMMARIZE_PATTERNS = re.compile(
-    r"\b(summarize|summary|tl;dr|condense|key points|brief overview)\b",
+    r"\b(summarize|summary|tl;dr|condense|key points|brief overview|summarise)\b",
     re.IGNORECASE,
 )
 _CLASSIFY_PATTERNS = re.compile(
     r"\b(classify|categorize|tag|label|triage|route|which bucket|yes or no|"
-    r"binary decision)\b",
+    r"binary decision|sentiment|positive|negative|neutral|urgent|urgency)\b",
     re.IGNORECASE,
 )
 _EXTRACT_PATTERNS = re.compile(
@@ -71,6 +71,19 @@ _LONG_CONTEXT_PATTERNS = re.compile(
     r"context window|transcript|entire report)\b",
     re.IGNORECASE,
 )
+# Planning, review, decomposition, risk assessment — premium reasoning tasks
+_PLAN_REVIEW_PATTERNS = re.compile(
+    r"\b(decompose|implementation units?|done condition|plan|roadmap|"
+    r"review this|assess|assessment|risk|risks|diagnose|diagnosis|"
+    r"tradeoff|trade-off|evaluate|break down|break this down|"
+    r"what are the risks|migration|zero downtime|rollout)\b",
+    re.IGNORECASE,
+)
+# Standup / meeting notes → classify/extract, not code debug
+_MEETING_PATTERNS = re.compile(
+    r"\b(standup|stand.up|meeting|standup notes?|sprint|retro|blocker)\b",
+    re.IGNORECASE,
+)
 
 
 def classify_task(query: str) -> TaskClassification:
@@ -82,9 +95,15 @@ def classify_task(query: str) -> TaskClassification:
         return TaskClassification("source-reading", 0.9)
     if _LONG_CONTEXT_PATTERNS.search(q):
         return TaskClassification("synthesis", 0.85)
+    # Meeting/standup notes → summarize (router_control lane)
+    if _MEETING_PATTERNS.search(q):
+        return TaskClassification("summarize", 0.9)
     # Architectural phrases take priority over generic code-complex patterns
     if _ARCHITECTURAL_PHRASES.search(q):
         return TaskClassification("architecture-review", 0.9)
+    # Planning, review, risk, decomposition → code-complex (premium_workhorse)
+    if _PLAN_REVIEW_PATTERNS.search(q):
+        return TaskClassification("code-complex", 0.85)
     if _CODE_COMPLEX_PATTERNS.search(q):
         if (
             "debug" in q.lower()
