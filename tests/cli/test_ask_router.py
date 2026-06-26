@@ -174,3 +174,75 @@ class TestAskModelResolution:
             cfg.agent.default_agent = ""
             result = CliRunner().invoke(cli, ["ask", "Hello"])
         assert result.exit_code == 0
+
+    def test_cloud_fallback_reselects_engine(self) -> None:
+        """A cloud fallback model must re-select the cloud engine.
+
+        Regression for the local-engine-up-but-default-missing path: the engine
+        is first resolved against the (missing) ``default_model`` and lands on
+        the local engine, whose ``can_serve`` is ``False`` for ``openrouter/``
+        ids. ``ask`` must then re-resolve so the request actually runs on the
+        cloud engine instead of dying at call time with a local 404.
+        """
+        # Local engine: healthy, but cannot serve cloud-namespaced ids.
+        local = mock.MagicMock()
+        local.engine_id = "ollama"
+        local.health.return_value = True
+        local.list_models.return_value = ["qwen2.5:1.5b"]
+        local.can_serve.side_effect = lambda m: not m.startswith("openrouter/")
+
+        # Cloud engine: serves the openrouter fallback and answers.
+        cloud = mock.MagicMock()
+        cloud.engine_id = "cloud"
+        cloud.health.return_value = True
+        cloud.list_models.return_value = ["openrouter/free"]
+        cloud.can_serve.side_effect = lambda m: m.startswith("openrouter/")
+        cloud.generate.return_value = {
+            "content": "CLOUD-OK",
+            "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+            "model": "openrouter/free",
+            "finish_reason": "stop",
+        }
+
+        # get_engine: first call (default model) -> local; re-resolve for the
+        # cloud fallback model -> cloud.
+        def _get_engine(config, key=None, model=None):  # noqa: ANN001
+            if model and model.startswith("openrouter/"):
+                return ("cloud", cloud)
+            return ("ollama", local)
+
+        _register_agents()
+        with (
+            mock.patch.object(_ask_mod, "get_engine", side_effect=_get_engine),
+            mock.patch.object(
+                _ask_mod,
+                "discover_engines",
+                return_value={"ollama": local, "cloud": cloud},
+            ),
+            mock.patch.object(
+                _ask_mod,
+                "discover_models",
+                return_value={"ollama": ["qwen2.5:1.5b"], "cloud": ["openrouter/free"]},
+            ),
+            mock.patch.object(_ask_mod, "register_builtin_models"),
+            mock.patch.object(_ask_mod, "merge_discovered_models"),
+            mock.patch.object(_ask_mod, "TelemetryStore"),
+            mock.patch.object(_ask_mod, "load_config") as mock_config,
+        ):
+            cfg = mock_config.return_value
+            cfg.telemetry.enabled = False
+            # default_model is configured but NOT present on the local engine.
+            cfg.intelligence.default_model = "missing-local-model"
+            cfg.intelligence.fallback_model = "openrouter/free"
+            cfg.intelligence.preferred_engine = ""
+            cfg.intelligence.temperature = 0.7
+            cfg.intelligence.max_tokens = 1024
+            cfg.agent.context_from_memory = False
+            cfg.agent.default_agent = ""
+            result = CliRunner().invoke(cli, ["ask", "Hello"])
+
+        assert result.exit_code == 0, result.output
+        # The cloud engine (not the local one) must have served the request.
+        assert cloud.generate.called
+        assert not local.generate.called
+        assert cloud.generate.call_args.kwargs["model"] == "openrouter/free"

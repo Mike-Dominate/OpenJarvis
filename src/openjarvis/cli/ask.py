@@ -805,26 +805,10 @@ def ask(
         )
         return
 
-    # Apply security guardrails
-    from openjarvis.security import setup_security
-
-    sec = setup_security(config, engine, bus)
-    engine = sec.engine
-
-    # Wrap engine with InstrumentedEngine for telemetry (energy + GPU metrics)
-    energy_monitor = None
-    want_energy = config.telemetry.gpu_metrics or enable_profile
-    if want_energy:
-        try:
-            from openjarvis.telemetry.energy_monitor import create_energy_monitor
-
-            energy_monitor = create_energy_monitor(
-                prefer_vendor=config.telemetry.energy_vendor or None,
-            )
-        except Exception as exc:
-            logger.debug("Failed to create energy monitor: %s", exc)
-    engine = InstrumentedEngine(engine, bus, energy_monitor=energy_monitor)
-
+    # ------------------------------------------------------------------
+    # Resolve the concrete model BEFORE wrapping/securing the engine, so a
+    # fallback model can re-select a different engine (see below).
+    # ------------------------------------------------------------------
     # Discover models and merge into registry
     all_engines = discover_engines(config)
     all_models = discover_models(all_engines)
@@ -851,6 +835,47 @@ def ask(
     if not model_name:
         console.print("[red]No model available on engine.[/red]")
         sys.exit(1)
+
+    # The engine above was selected against the *default* model (or the -m
+    # flag). If model resolution then fell back to a different model — e.g. the
+    # configured ``default_model`` disappeared and we fell back to
+    # ``openrouter/free`` — the originally-selected engine may not be able to
+    # serve it. Re-resolve so a cloud fallback model actually lands on the
+    # cloud engine instead of dying at call time with a local-engine 404. This
+    # is a no-op whenever the current engine can already serve the model.
+    # ``can_serve`` is part of the InferenceEngine ABC; guard with getattr so a
+    # minimal duck-typed engine (e.g. a test stub) is treated as "serves it".
+    can_serve = getattr(engine, "can_serve", None)
+    if callable(can_serve) and not can_serve(model_name):
+        reselected = get_engine(config, effective_engine_key, model=model_name)
+        if reselected is not None:
+            engine_name, engine = reselected
+            engine_models = all_models.get(engine_name, [])
+            logger.debug(
+                "Re-resolved engine to %r for fallback model %r",
+                engine_name,
+                model_name,
+            )
+
+    # Apply security guardrails
+    from openjarvis.security import setup_security
+
+    sec = setup_security(config, engine, bus)
+    engine = sec.engine
+
+    # Wrap engine with InstrumentedEngine for telemetry (energy + GPU metrics)
+    energy_monitor = None
+    want_energy = config.telemetry.gpu_metrics or enable_profile
+    if want_energy:
+        try:
+            from openjarvis.telemetry.energy_monitor import create_energy_monitor
+
+            energy_monitor = create_energy_monitor(
+                prefer_vendor=config.telemetry.energy_vendor or None,
+            )
+        except Exception as exc:
+            logger.debug("Failed to create energy monitor: %s", exc)
+    engine = InstrumentedEngine(engine, bus, energy_monitor=energy_monitor)
 
     # Apply complexity-suggested token budget when user didn't override.
     # Use at least the config default so we never reduce tokens below what
