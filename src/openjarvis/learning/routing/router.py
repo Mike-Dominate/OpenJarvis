@@ -244,8 +244,8 @@ def escalation_chain_for_lane(lane: str) -> List[str]:
     return list(_LANE_ESCALATION_ORDER.get(lane, [lane]))
 
 
-def _prefer_local(models: List[str]) -> List[str]:
-    def rank(model: str) -> tuple[int, float, str]:
+def _prefer_local(models: List[str], *, prefer_qwen_for_text: bool = False) -> List[str]:
+    def rank(model: str) -> tuple[int, int, float, str]:
         spec = _model_spec(model)
         engines = tuple(spec.supported_engines) if spec is not None else ()
         local = (
@@ -256,8 +256,14 @@ def _prefer_local(models: List[str]) -> List[str]:
             )
             else 1
         )
+        # When prefer_qwen_for_text is True, rank qwen2.5:1.5b before llama3.2:1b.
+        # llama3.2:1b has higher refusal friction on benign text tasks.
+        qwen_penalty = 0
+        if prefer_qwen_for_text:
+            if "llama3.2" in model.lower():
+                qwen_penalty = 1  # push llama3.2 after qwen
         size = _model_size(model) or 0.0
-        return (local, size, model)
+        return (local, qwen_penalty, size, model)
 
     return sorted(models, key=rank)
 
@@ -371,7 +377,15 @@ class HeuristicRouter(RouterPolicy):
             lane = context.lane or _lane_for_context(context)
             lane_candidates = _filter_by_lane(available, lane)
             if lane_candidates:
-                lane_candidates = _prefer_local(lane_candidates)
+                # For text-dominant task classes (classify, summarize, extract,
+                # rewrite, compare, source-reading) prefer qwen2.5 over llama3.2
+                # because llama3.2:1b has higher refusal friction on benign tasks.
+                _TEXT_TASK_CLASSES = {
+                    "classify", "summarize", "extract", "rewrite", "compare",
+                    "source-reading", "source-finding", "synthesis",
+                }
+                prefer_qwen = context.task_class in _TEXT_TASK_CLASSES
+                lane_candidates = _prefer_local(lane_candidates, prefer_qwen_for_text=prefer_qwen)
                 if lane == LANE_ROUTER_CONTROL:
                     return _smallest_model(lane_candidates) or lane_candidates[0]
                 if lane == LANE_FREE_FALLBACK:

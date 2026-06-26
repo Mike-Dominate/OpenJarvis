@@ -23,7 +23,16 @@ _VISION_PATTERNS = re.compile(
 )
 _CODE_COMPLEX_PATTERNS = re.compile(
     r"\b(architecture|multi-file|root cause|intermittent|concurrency|debug|"
-    r"refactor|design|system design|novel algorithm)\b",
+    r"refactor|design|system design|novel algorithm|propose the shape|"
+    r"file structure|class structure|high.level structure)\b",
+    re.IGNORECASE,
+)
+
+# Phrases that indicate architectural design scope even without explicit keywords
+_ARCHITECTURAL_PHRASES = re.compile(
+    r"(propose.{0,20}(shape|structure|design)|"
+    r"(multi.file|multi file).{0,30}(feature|layer|system)|"
+    r"(file|class).{0,10}structure.{0,30}(for a|for the))",
     re.IGNORECASE,
 )
 _CODE_PATTERNS = re.compile(
@@ -73,6 +82,9 @@ def classify_task(query: str) -> TaskClassification:
         return TaskClassification("source-reading", 0.9)
     if _LONG_CONTEXT_PATTERNS.search(q):
         return TaskClassification("synthesis", 0.85)
+    # Architectural phrases take priority over generic code-complex patterns
+    if _ARCHITECTURAL_PHRASES.search(q):
+        return TaskClassification("architecture-review", 0.9)
     if _CODE_COMPLEX_PATTERNS.search(q):
         if (
             "debug" in q.lower()
