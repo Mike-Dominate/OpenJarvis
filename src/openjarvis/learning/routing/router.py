@@ -138,9 +138,22 @@ def _find_model_by_tag(available: List[str], tag: str) -> Optional[str]:
 def _largest_model(available: List[str]) -> Optional[str]:
     if not available:
         return None
-    best = available[0]
+    # Prefer local non-legacy models: pick the largest among local-first,
+    # falling back to cloud only if no local candidates exist.
+    def _is_local(model_id: str) -> bool:
+        spec = _model_spec(model_id)
+        if spec is None:
+            return False
+        return any(
+            e in spec.supported_engines
+            for e in ("llamacpp", "lmstudio", "vllm", "ollama", "mlx", "sglang")
+        ) and not spec.metadata.get("legacy")
+
+    local_candidates = [m for m in available if _is_local(m)]
+    candidates = local_candidates if local_candidates else available
+    best = candidates[0]
     best_size = _model_size(best)
-    for key in available[1:]:
+    for key in candidates[1:]:
         size = _model_size(key)
         if size > best_size:
             best = key
@@ -151,9 +164,14 @@ def _largest_model(available: List[str]) -> Optional[str]:
 def _smallest_model(available: List[str]) -> Optional[str]:
     if not available:
         return None
-    best = available[0]
+    # Prefer non-legacy, non-on-demand models when available.
+    active = [m for m in available
+              if not (_model_spec(m) or type("", (), {"metadata": {}})()).metadata.get("legacy")
+              and not (_model_spec(m) or type("", (), {"metadata": {}})()).metadata.get("on_demand")]
+    candidates = active if active else available
+    best = candidates[0]
     best_size = _model_size(best) or float("inf")
-    for key in available[1:]:
+    for key in candidates[1:]:
         size = _model_size(key)
         if 0 < size < best_size:
             best = key
@@ -204,6 +222,16 @@ def _spec_lane(model_id: str) -> str:
         if isinstance(lane, str) and lane:
             return lane
     lower = model_id.lower()
+    # ── Bems-PC GGUF models (llama.cpp, post-Ollama 2026-06-26) ──────────────
+    # Primary workhorse: Qwen3.6-35B-A3B Uncensored (thinking, deep reasoning)
+    if "qwen3.6-35b-a3b" in lower or "qwen3.6_35b_a3b" in lower:
+        return LANE_PREMIUM_WORKHORSE
+    # Fast router/classifier: Qwen3-30B-A3B-2507 (no thinking, 18 tok/s)
+    if "qwen3-30b-a3b" in lower or "qwen3_30b_a3b" in lower:
+        return LANE_ROUTER_CONTROL
+    # Dense on-demand: Qwen3.6-27B (thinking, slow, deep knowledge)
+    if "qwen3.6-27b" in lower or "qwen3.6_27b" in lower:
+        return LANE_PREMIUM_WORKHORSE
     # OJ Tier 2b: Windows path to the Qwen coder GGUF — detect by path suffix
     if "qwen2.5-coder" in lower or "qwen2.5_coder" in lower:
         return LANE_CODE_SPECIALIST
@@ -248,17 +276,20 @@ def escalation_chain_for_lane(lane: str) -> List[str]:
 
 
 def _prefer_local(models: List[str], *, prefer_qwen_for_text: bool = False) -> List[str]:
-    def rank(model: str) -> tuple[int, int, float, str]:
+    def rank(model: str) -> tuple[int, int, int, float, str]:
         spec = _model_spec(model)
         engines = tuple(spec.supported_engines) if spec is not None else ()
         local = (
             0
             if any(
                 e in engines
-                for e in ("ollama", "llamacpp", "vllm", "mlx", "sglang")
+                for e in ("ollama", "llamacpp", "lmstudio", "vllm", "mlx", "sglang")
             )
             else 1
         )
+        # Penalise legacy/on-demand models so actively-running discovered engines win.
+        legacy = 1 if (spec is not None and spec.metadata.get("legacy")) else 0
+        on_demand = 1 if (spec is not None and spec.metadata.get("on_demand")) else 0
         # When prefer_qwen_for_text is True, rank qwen2.5:1.5b before llama3.2:1b.
         # llama3.2:1b has higher refusal friction on benign text tasks.
         qwen_penalty = 0
@@ -266,7 +297,7 @@ def _prefer_local(models: List[str], *, prefer_qwen_for_text: bool = False) -> L
             if "llama3.2" in model.lower():
                 qwen_penalty = 1  # push llama3.2 after qwen
         size = _model_size(model) or 0.0
-        return (local, qwen_penalty, size, model)
+        return (local, legacy, on_demand, qwen_penalty, size, model)
 
     return sorted(models, key=rank)
 

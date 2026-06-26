@@ -365,9 +365,14 @@ class OllamaEngineConfig:
 
 @dataclass(slots=True)
 class VLLMEngineConfig:
-    """Per-engine config for vLLM."""
+    """Per-engine config for vLLM.
 
-    host: str = "http://localhost:8000"
+    Re-purposed 2026-06-26: maps to OJ Tier 2b llama.cpp endpoint over Tailscale.
+    Ollama removed from Bems-PC; all local inference now via llamacpp (port 11434)
+    and lmstudio (port 11435). OJ runs llama.cpp at 100.116.196.116:11434.
+    """
+
+    host: str = "http://100.116.196.116:11434"
 
 
 @dataclass(slots=True)

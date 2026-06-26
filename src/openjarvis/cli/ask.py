@@ -821,6 +821,13 @@ def ask(
         merge_discovered_models(ek, model_ids)
     engine_models = all_models.get(engine_name, [])
 
+    # Build the full list of actually-discovered models across all engines.
+    # Using the full ModelRegistry as available_models causes routing to pick
+    # catalog entries that aren't actually reachable on this machine (e.g.
+    # llama3.3:70b listed as "ollama/vllm" but neither is running). Restricting
+    # to discovered models ensures local-first routing only considers live endpoints.
+    all_discovered = [m for mids in all_models.values() for m in mids]
+
     # Resolve model via config fallback chain
     if model_name is None:
         model_name = config.intelligence.default_model
@@ -849,7 +856,7 @@ def ask(
     routing_context.vision_required = bool(image_b64)
     route_decision = explain_route(
         routing_context,
-        available_models=engine_models,
+        available_models=all_discovered,
         default_model=config.intelligence.default_model or "",
         fallback_model=config.intelligence.fallback_model or "",
     )

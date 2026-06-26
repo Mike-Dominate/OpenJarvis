@@ -93,63 +93,113 @@ def infer_routing_metadata(model_id: str) -> Dict[str, object]:
 
 BUILTIN_MODELS: List[ModelSpec] = [
     # -----------------------------------------------------------------------
-    # Local models — Dense
+    # Bems-PC local models — llama.cpp CUDA (snap) on /mnt/models
+    # Ollama removed 2026-06-26. Engine: llamacpp (port 11434) and
+    # lmstudio (fast, port 11435). See ~/.openjarvis/config.toml.
     # -----------------------------------------------------------------------
+
+    # PRIMARY WORKHORSE — Bems-PC port 11434
+    # Qwen3.6-35B-A3B Uncensored | MoE 35B total / ~3B active | thinking mode
+    # 14.3 tok/s CUDA | 256K context | April 2026 cutoff | abliterated
     ModelSpec(
-        model_id="qwen2.5:1.5b",
-        name="Qwen2.5 1.5B",
-        parameter_count_b=1.5,
-        context_length=131072,
-        supported_engines=("ollama", "vllm", "llamacpp", "mlx", "sglang"),
+        model_id="Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf",
+        name="Qwen3.6 35B-A3B Uncensored (Bems-PC primary)",
+        parameter_count_b=35.0,
+        active_parameter_count_b=3.5,
+        context_length=262144,
+        supported_engines=("llamacpp",),
+        provider="alibaba",
+        metadata={
+            "architecture": "moe",
+            "hf_repo": "HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive",
+            "node": "bems-pc",
+            "port": 11434,
+            "thinking": True,
+            "uncensored": True,
+            "knowledge_cutoff": "2026-04",
+            **_routing_metadata(
+                "premium_workhorse",
+                local=True,
+                capabilities=["reasoning", "code", "research", "planning", "synthesis"],
+                latency_band="medium",
+                cost_band="local",
+            ),
+        },
+    ),
+
+    # FAST LOCAL — Bems-PC port 11435
+    # Qwen3-30B-A3B-Instruct-2507 | MoE 30B total / ~3B active | no thinking
+    # 18.3 tok/s CUDA | 256K context | July 2025 cutoff | direct answers
+    ModelSpec(
+        model_id="Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf",
+        name="Qwen3 30B-A3B 2507 (Bems-PC fast)",
+        parameter_count_b=30.0,
+        active_parameter_count_b=3.0,
+        context_length=262144,
+        supported_engines=("lmstudio",),
+        provider="alibaba",
+        metadata={
+            "architecture": "moe",
+            "hf_repo": "unsloth/Qwen3-30B-A3B-Instruct-2507-GGUF",
+            "node": "bems-pc",
+            "port": 11435,
+            "thinking": False,
+            "knowledge_cutoff": "2025-07",
+            **_routing_metadata(
+                "router_control",
+                local=True,
+                stable_json=True,
+                capabilities=["classification", "routing", "fast_completion", "structured_output"],
+                latency_band="low",
+                cost_band="local",
+            ),
+        },
+    ),
+
+    # DENSE WORKHORSE — Bems-PC (on-demand, not always running)
+    # Qwen3.6-27B Dense Uncensored | 27B all-active | thinking mode
+    # 3.3 tok/s CUDA | 256K context | April 2026 cutoff | abliterated
+    # Use for: tasks needing dense parameter activation (not MoE shortcuts)
+    ModelSpec(
+        model_id="Qwen3.6-27B-Uncensored-HauhauCS-Aggressive-Q4_K_P.gguf",
+        name="Qwen3.6 27B Dense Uncensored (Bems-PC dense)",
+        parameter_count_b=27.0,
+        context_length=262144,
+        supported_engines=("llamacpp",),
         provider="alibaba",
         metadata={
             "architecture": "dense",
-            "hf_repo": "Qwen/Qwen2.5-1.5B-Instruct",
-            **infer_routing_metadata("qwen2.5:1.5b"),
+            "hf_repo": "HauhauCS/Qwen3.6-27B-Uncensored-HauhauCS-Aggressive",
+            "node": "bems-pc",
+            "thinking": True,
+            "uncensored": True,
+            "knowledge_cutoff": "2026-04",
+            "on_demand": True,
+            **_routing_metadata(
+                "premium_workhorse",
+                local=True,
+                capabilities=["deep_reasoning", "long_context", "research"],
+                latency_band="high",
+                cost_band="local",
+            ),
         },
     ),
-    ModelSpec(
-        model_id="llama3.2:1b",
-        name="Llama 3.2 1B",
-        parameter_count_b=1.0,
-        context_length=131072,
-        supported_engines=("ollama", "vllm", "llamacpp"),
-        provider="meta",
-        metadata={
-            "architecture": "dense",
-            "hf_repo": "meta-llama/Llama-3.2-1B-Instruct",
-            **infer_routing_metadata("llama3.2:1b"),
-        },
-    ),
-    ModelSpec(
-        model_id="qwen2.5-coder:7b",
-        name="Qwen2.5 Coder 7B",
-        parameter_count_b=7.0,
-        context_length=131072,
-        supported_engines=("ollama", "vllm", "llamacpp", "sglang"),
-        provider="alibaba",
-        metadata={
-            "architecture": "dense",
-            "hf_repo": "Qwen/Qwen2.5-Coder-7B-Instruct",
-            **infer_routing_metadata("qwen2.5-coder:7b"),
-        },
-    ),
-    # OJ Tier 2b: Qwen2.5-Coder-7B served by llama.cpp on OJ over Tailscale
-    # Endpoint: http://100.116.196.116:11434 (engine key: llamacpp)
-    # The model_id here exactly matches what /v1/models returns from OJ so
-    # discover_models() can resolve it. routing lane: code_specialist.
+
+    # OJ TIER 2b — code specialist over Tailscale
+    # Qwen2.5-Coder-7B | engine: vllm (mapped to OJ endpoint)
+    # RTX 2000 Ada 8GB VRAM | fast code generation
     ModelSpec(
         model_id="C:\\models\\Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf",
         name="Qwen2.5 Coder 7B Q4 (OJ/llama.cpp)",
         parameter_count_b=7.0,
         context_length=32768,
-        supported_engines=("llamacpp",),
+        supported_engines=("vllm",),
         provider="alibaba",
         metadata={
             "architecture": "dense",
             "hf_repo": "Qwen/Qwen2.5-Coder-7B-Instruct",
-            "oj_tier": "2b",
             "node": "OJ",
+            "oj_tier": "2b",
             **_routing_metadata(
                 "code_specialist",
                 local=True,
@@ -157,6 +207,37 @@ BUILTIN_MODELS: List[ModelSpec] = [
                 latency_band="medium",
                 cost_band="local",
             ),
+        },
+    ),
+
+    # Legacy Ollama router models — kept for reference, no longer active
+    # (Ollama removed 2026-06-26, engines changed to llamacpp/lmstudio)
+    ModelSpec(
+        model_id="qwen2.5:1.5b",
+        name="Qwen2.5 1.5B (legacy — Ollama era)",
+        parameter_count_b=1.5,
+        context_length=131072,
+        supported_engines=("llamacpp",),
+        provider="alibaba",
+        metadata={
+            "architecture": "dense",
+            "hf_repo": "Qwen/Qwen2.5-1.5B-Instruct",
+            "legacy": True,
+            **infer_routing_metadata("qwen2.5:1.5b"),
+        },
+    ),
+    ModelSpec(
+        model_id="llama3.2:1b",
+        name="Llama 3.2 1B (legacy — Ollama era)",
+        parameter_count_b=1.0,
+        context_length=131072,
+        supported_engines=("llamacpp",),
+        provider="meta",
+        metadata={
+            "architecture": "dense",
+            "hf_repo": "meta-llama/Llama-3.2-1B-Instruct",
+            "legacy": True,
+            **infer_routing_metadata("llama3.2:1b"),
         },
     ),
     ModelSpec(
