@@ -204,6 +204,9 @@ def _spec_lane(model_id: str) -> str:
         if isinstance(lane, str) and lane:
             return lane
     lower = model_id.lower()
+    # OJ Tier 2b: Windows path to the Qwen coder GGUF — detect by path suffix
+    if "qwen2.5-coder" in lower or "qwen2.5_coder" in lower:
+        return LANE_CODE_SPECIALIST
     if (
         lower.startswith("openrouter/free")
         or lower == "openrouter/free"

@@ -134,6 +134,31 @@ BUILTIN_MODELS: List[ModelSpec] = [
             **infer_routing_metadata("qwen2.5-coder:7b"),
         },
     ),
+    # OJ Tier 2b: Qwen2.5-Coder-7B served by llama.cpp on OJ over Tailscale
+    # Endpoint: http://100.116.196.116:11434 (engine key: llamacpp)
+    # The model_id here exactly matches what /v1/models returns from OJ so
+    # discover_models() can resolve it. routing lane: code_specialist.
+    ModelSpec(
+        model_id="C:\\models\\Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf",
+        name="Qwen2.5 Coder 7B Q4 (OJ/llama.cpp)",
+        parameter_count_b=7.0,
+        context_length=32768,
+        supported_engines=("llamacpp",),
+        provider="alibaba",
+        metadata={
+            "architecture": "dense",
+            "hf_repo": "Qwen/Qwen2.5-Coder-7B-Instruct",
+            "oj_tier": "2b",
+            "node": "OJ",
+            **_routing_metadata(
+                "code_specialist",
+                local=True,
+                capabilities=["code", "patching", "tests", "refactor"],
+                latency_band="medium",
+                cost_band="local",
+            ),
+        },
+    ),
     ModelSpec(
         model_id="openrouter/free",
         name="OpenRouter Free",
