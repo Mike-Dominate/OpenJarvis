@@ -230,6 +230,11 @@ def _spec_lane(model_id: str) -> str:
     return LANE_CHEAP_PAID_WORKHORSE
 
 
+def lane_for_model(model_id: str) -> str:
+    """Public helper that maps a model id to its routing lane."""
+    return _spec_lane(model_id)
+
+
 def _filter_by_lane(available: Iterable[str], lane: str) -> List[str]:
     return [model for model in available if _spec_lane(model) == lane]
 
@@ -414,4 +419,5 @@ __all__ = [
     "build_routing_context",
     "escalation_chain_for_lane",
     "explain_route",
+    "lane_for_model",
 ]
