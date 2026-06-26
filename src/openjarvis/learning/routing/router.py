@@ -6,8 +6,9 @@ import logging
 from dataclasses import dataclass
 from typing import Iterable, List, Optional
 
+from openjarvis.core.events import EventBus, EventType
 from openjarvis.core.registry import ModelRegistry
-from openjarvis.core.types import RoutingContext
+from openjarvis.core.types import RoutingContext, StepType
 from openjarvis.learning._stubs import QueryAnalyzer, RouterPolicy
 from openjarvis.learning.routing.task_classifier import classify_task
 
@@ -292,6 +293,41 @@ def explain_route(
     )
 
 
+def emit_route_trace(
+    bus: EventBus | None,
+    *,
+    context: RoutingContext,
+    decision: RouteDecision,
+    selected_model: str,
+    selected_engine: str,
+    failure_reason: str | None = None,
+) -> None:
+    """Publish a standardized route trace event when a bus is available."""
+    if bus is None:
+        return
+    metadata = {"reason": decision.reason}
+    if failure_reason:
+        metadata["failure_reason"] = failure_reason
+    bus.publish(
+        EventType.TRACE_STEP,
+        {
+            "step_type": StepType.ROUTE.value,
+            "input": {
+                "query": context.query,
+                "task_class": context.task_class,
+            },
+            "output": {
+                "lane": decision.lane,
+                "model": selected_model,
+                "candidate_models": decision.candidate_models,
+                "escalation_chain": decision.escalation_chain,
+                "selected_engine": selected_engine,
+            },
+            "metadata": metadata,
+        },
+    )
+
+
 class HeuristicRouter(RouterPolicy):
     """Rule-based model router with Pass-1 lane awareness.
 
@@ -418,6 +454,7 @@ __all__ = [
     "RouteDecision",
     "build_routing_context",
     "escalation_chain_for_lane",
+    "emit_route_trace",
     "explain_route",
     "lane_for_model",
 ]

@@ -28,7 +28,11 @@ from openjarvis.intelligence import (
     merge_discovered_models,
     register_builtin_models,
 )
-from openjarvis.learning.routing.router import build_routing_context, explain_route
+from openjarvis.learning.routing.router import (
+    build_routing_context,
+    emit_route_trace,
+    explain_route,
+)
 from openjarvis.telemetry.instrumented_engine import InstrumentedEngine
 from openjarvis.telemetry.store import TelemetryStore
 
@@ -871,25 +875,12 @@ def ask(
                 model_name,
             )
 
-    bus.publish(
-        EventType.TRACE_STEP,
-        {
-            "step_type": StepType.ROUTE.value,
-            "input": {
-                "query": query_text,
-                "task_class": routing_context.task_class,
-            },
-            "output": {
-                "lane": route_decision.lane,
-                "model": model_name,
-                "candidate_models": route_decision.candidate_models,
-                "escalation_chain": route_decision.escalation_chain,
-                "selected_engine": engine_name,
-            },
-            "metadata": {
-                "reason": route_decision.reason,
-            },
-        },
+    emit_route_trace(
+        bus,
+        context=routing_context,
+        decision=route_decision,
+        selected_model=model_name,
+        selected_engine=engine_name,
     )
 
     # Apply security guardrails
@@ -949,6 +940,14 @@ def ask(
                 memory_files_config=effective_mf,
             )
         except EngineConnectionError as exc:
+            emit_route_trace(
+                bus,
+                context=routing_context,
+                decision=route_decision,
+                selected_model=model_name,
+                selected_engine=engine_name,
+                failure_reason=str(exc),
+            )
             console.print(f"[red]Engine error:[/red] {exc}")
             console.print(hint_no_engine())
             sys.exit(1)
@@ -1058,6 +1057,14 @@ def ask(
                 max_tokens=max_tokens,
             )
     except EngineConnectionError as exc:
+        emit_route_trace(
+            bus,
+            context=routing_context,
+            decision=route_decision,
+            selected_model=model_name,
+            selected_engine=engine_name,
+            failure_reason=str(exc),
+        )
         console.print(f"[red]Engine error:[/red] {exc}")
         console.print(hint_no_engine())
         sys.exit(1)
